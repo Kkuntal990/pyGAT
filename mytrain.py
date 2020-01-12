@@ -46,81 +46,85 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 if args.cuda:
-    torch.cuda.manual_seed(args.seed)
+	torch.cuda.manual_seed(args.seed)
 
 
 adj, features, labels, idx_train = load_data1(args.nodes)
 
 #print(adj)
 if args.sparse:
-    model = SpGAT(nfeat=features.shape[1], 
-                nhid=args.hidden, 
-                nclass=int(labels.max()) + 1, 
-                dropout=args.dropout, 
-                nheads=args.nb_heads, 
-                alpha=args.alpha)
+	model = SpGAT(nfeat=features.shape[1], 
+				nhid=args.hidden, 
+				nclass=int(labels.max()) + 1, 
+				dropout=args.dropout, 
+				nheads=args.nb_heads, 
+				alpha=args.alpha)
 else:
-    model = GAT(nfeat=features.shape[1], 
-                nhid=args.hidden, 
-                nclass=int(labels.max()) + 1, 
-                dropout=args.dropout, 
-                nheads=args.nb_heads, 
-                alpha=args.alpha)
+	model = GAT(nfeat=features.shape[1], 
+				nhid=args.hidden, 
+				nclass=int(labels.max()) + 1, 
+				dropout=args.dropout, 
+				nheads=args.nb_heads, 
+				alpha=args.alpha)
 optimizer = optim.Adam(model.parameters(), 
-                       lr=args.lr, 
-                       weight_decay=args.weight_decay)
+					   lr=args.lr, 
+					   weight_decay=args.weight_decay)
 
 if args.cuda:
-    model.cuda()
-    features = features.cuda()
-    adj = adj.cuda()
-    labels = labels.cuda()
-    idx_train = idx_train.cuda()
-    
+	model.cuda()
+	features = features.cuda()
+	adj = adj.cuda()
+	labels = labels.cuda()
+	idx_train = idx_train.cuda()
+	
 
-features, adj, labels = Variable(features), Variable(adj), Variable(labels)
+features, adj, labels, idx_train = Variable(features), Variable(adj), Variable(labels), Variable(idx_train)
 #print(adj.shape)
 
 
-def tsne_plot(data, num,epochs):
-
-	tsne = TSNE(n_components =2, perplexity=7, n_iter=1000, method= 'exact',verbose=0)
-	tsne_result = tsne.fit_transform(data)
+def tsne_plot(feat, num,epochs):
+	tsne = TSNE(n_components =2, perplexity=10, n_iter=1000, method= 'exact',verbose=0)
+	tsne_result = tsne.fit_transform(feat)
+	#print(" Shape of features: ", feat.shape)
 	df = pd.DataFrame()
-	df["one-tsne"] = tsne_result[:,0]
-	df["two-tsne"] = tsne_result[:,1]
-	df["y"] = labels
+	df["one_tsne"] = tsne_result[:,0]
+	df["two_tsne"] = tsne_result[:,1]
+	df["y"] = labels.cpu().data.numpy()
 	ax = plt.subplot(2,3,num)
 	ax.set_title('epoch {}/{}'.format((num-1)*150,epochs ))
-	sns.scatterplot(x="one-tsne", y = "two-tsne",hue="y",palette=sns.color_palette("hls",3),data=df, legend="full",alpha=0.3,ax=ax)
-
+	p1 = sns.scatterplot(x="one_tsne", y = "two_tsne",hue="y",palette=sns.color_palette("hls",3),data=df, legend="full",alpha=0.3,ax=ax)
+	idx_train_cpu = idx_train.cpu().data.numpy()
+	#print(idx_train_cpu)
+	for idx in range(idx_train_cpu.shape[0]):
+		p1.text(df["one_tsne"][idx]+0.01, df["two_tsne"][idx]+0.01, idx, horizontalalignment='left', 
+					size='small',color='black')
 	
 
 
 
 
 def train(epoch):
-    t = time.time()
-    model.train()
-    optimizer.zero_grad()
-    output = model(features, adj)
-    loss_train = F.nll_loss(output[idx_train], labels[idx_train])
-    acc_train = accuracy(output[idx_train], labels[idx_train])
-    loss_train.backward()
-    optimizer.step()
+	t = time.time()
+	model.train()
+	optimizer.zero_grad()
+	output = model(features, adj)
+	loss_train = F.nll_loss(output[idx_train], labels[idx_train])
+	acc_train = accuracy(output[idx_train], labels[idx_train])
+	loss_train.backward()
+	optimizer.step()
 
-    if not args.fastmode:
-        # Evaluate validation set performance separately,
-        # deactivates dropout during validation run.
-        model.eval()
-        output = model(features, adj)
+	if not args.fastmode:
+		# Evaluate validation set performance separately,
+		# deactivates dropout during validation run.
+		model.eval()
+		output = model(features, adj)
 
-    print('Epoch: {:04d}'.format(epoch+1),
-          'loss_train: {:.4f}'.format(loss_train.data.item()),
-          'acc_train: {:.4f}'.format(acc_train.data.item()),
-          'time: {:.4f}s'.format(time.time() - t))
+	print('Epoch: {:04d}'.format(epoch+1),
+		  'loss_train: {:.4f}'.format(loss_train.data.item()),
+		  'acc_train: {:.4f}'.format(acc_train.data.item()),
+		  'time: {:.4f}s'.format(time.time() - t))
 
-    return loss_train.data.item()
+	return loss_train.data.item()
 
 
 t_total = time.time()
@@ -144,8 +148,8 @@ for epoch in range(args.epochs):
 
 	if epoch%150==0:
 		#print(epoch)
-		#features = features.numpy()
-		featuresStack.append(features)
+		feat = features.cpu().numpy()
+		featuresStack.append(feat)
 
 	#features = features.cuda()
 
@@ -157,9 +161,9 @@ for epoch in range(args.epochs):
 
 files = glob.glob('*.pkl')
 for file in files:
-    epoch_nb = int(file.split('.')[0])
-    if epoch_nb > best_epoch:
-        os.remove(file)
+	epoch_nb = int(file.split('.')[0])
+	if epoch_nb > best_epoch:
+		os.remove(file)
 
 print("Optimization Finished!")
 print("Total time elapsed: {:.4f}s".format(time.time() - t_total))
@@ -178,3 +182,4 @@ plt.show()
 # Restore best model
 print('Loading {}th epoch'.format(best_epoch))
 model.load_state_dict(torch.load('{}.pkl'.format(best_epoch)))
+#print(idx_train, " with labels as : ", labels)
