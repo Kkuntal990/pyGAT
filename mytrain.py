@@ -9,22 +9,28 @@ import time
 import random
 import argparse
 import numpy as np
+import seaborn as sns
 import torch
+import pandas as pd
 import torch.nn as nn
+from sklearn.decomposition import PCA
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
 
-from utils import load_data, accuracy
+from utils import load_data, accuracy, load_data1
 from models import GAT, SpGAT
 
 # Training settings
 parser = argparse.ArgumentParser()
 parser.add_argument('--no-cuda', action='store_true', default=False, help='Disables CUDA training.')
 parser.add_argument('--fastmode', action='store_true', default=False, help='Validate during training pass.')
-parser.add_argument('--sparse', action='store_true', default=True, help='GAT with sparse version or not.')
+parser.add_argument('--sparse', action='store_true', default=False, help='GAT with sparse version or not.')
 parser.add_argument('--seed', type=int, default=72, help='Random seed.')
-parser.add_argument('--epochs', type=int, default=1000, help='Number of epochs to train.')
+parser.add_argument('--nodes', type=int, default=15,help='Number of nodes')
+parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs to train.')
 parser.add_argument('--lr', type=float, default=0.005, help='Initial learning rate.')
 parser.add_argument('--weight_decay', type=float, default=5e-4, help='Weight decay (L2 loss on parameters).')
 parser.add_argument('--hidden', type=int, default=8, help='Number of hidden units.')
@@ -42,10 +48,10 @@ torch.manual_seed(args.seed)
 if args.cuda:
     torch.cuda.manual_seed(args.seed)
 
-# Load data
-adj, features, labels, idx_train, idx_val, idx_test = load_data()
 
-# Model and optimizer
+adj, features, labels, idx_train = load_data1(args.nodes)
+
+#print(adj)
 if args.sparse:
     model = SpGAT(nfeat=features.shape[1], 
                 nhid=args.hidden, 
@@ -70,10 +76,27 @@ if args.cuda:
     adj = adj.cuda()
     labels = labels.cuda()
     idx_train = idx_train.cuda()
-    idx_val = idx_val.cuda()
-    idx_test = idx_test.cuda()
+    
 
 features, adj, labels = Variable(features), Variable(adj), Variable(labels)
+#print(adj.shape)
+
+
+def tsne_plot(data, num,epochs):
+
+	tsne = TSNE(n_components =2, perplexity=7, n_iter=1000, method= 'exact',verbose=0)
+	tsne_result = tsne.fit_transform(data)
+	df = pd.DataFrame()
+	df["one-tsne"] = tsne_result[:,0]
+	df["two-tsne"] = tsne_result[:,1]
+	df["y"] = labels
+	ax = plt.subplot(2,3,num)
+	ax.set_title('epoch {}/{}'.format((num-1)*150,epochs ))
+	sns.scatterplot(x="one-tsne", y = "two-tsne",hue="y",palette=sns.color_palette("hls",3),data=df, legend="full",alpha=0.3,ax=ax)
+
+	
+
+
 
 
 def train(epoch):
@@ -92,52 +115,45 @@ def train(epoch):
         model.eval()
         output = model(features, adj)
 
-    loss_val = F.nll_loss(output[idx_val], labels[idx_val])
-    acc_val = accuracy(output[idx_val], labels[idx_val])
     print('Epoch: {:04d}'.format(epoch+1),
           'loss_train: {:.4f}'.format(loss_train.data.item()),
           'acc_train: {:.4f}'.format(acc_train.data.item()),
-          'loss_val: {:.4f}'.format(loss_val.data.item()),
-          'acc_val: {:.4f}'.format(acc_val.data.item()),
           'time: {:.4f}s'.format(time.time() - t))
 
-    return loss_val.data.item()
+    return loss_train.data.item()
 
 
-def compute_test():
-    model.eval()
-    output = model(features, adj)
-    loss_test = F.nll_loss(output[idx_test], labels[idx_test])
-    acc_test = accuracy(output[idx_test], labels[idx_test])
-    print("Test set results:",
-          "loss= {:.4f}".format(loss_test.data),
-          "accuracy= {:.4f}".format(acc_test.data))
-
-# Train model
 t_total = time.time()
 loss_values = []
 bad_counter = 0
 best = args.epochs + 1
+featuresStack = []
 best_epoch = 0
 for epoch in range(args.epochs):
-    loss_values.append(train(epoch))
+	loss_values.append(train(epoch))
+	torch.save(model.state_dict(), '{}.pkl'.format(epoch))
+	if loss_values[-1] < best:
+		best = loss_values[-1]
+		best_epoch = epoch
+		bad_counter = 0
+	else:
+		bad_counter+=1
 
-    torch.save(model.state_dict(), '{}.pkl'.format(epoch))
-    if loss_values[-1] < best:
-        best = loss_values[-1]
-        best_epoch = epoch
-        bad_counter = 0
-    else:
-        bad_counter += 1
+	if bad_counter == args.patience:
+		break
 
-    if bad_counter == args.patience:
-        break
+	if epoch%150==0:
+		#print(epoch)
+		#features = features.numpy()
+		featuresStack.append(features)
 
-    files = glob.glob('*.pkl')
-    for file in files:
-        epoch_nb = int(file.split('.')[0])
-        if epoch_nb < best_epoch:
-            os.remove(file)
+	#features = features.cuda()
+
+	files = glob.glob('*.pkl')
+	for file in files:
+		epoch_nb = int(file.split('.')[0])
+		if epoch_nb < best_epoch:
+			os.remove(file)
 
 files = glob.glob('*.pkl')
 for file in files:
@@ -148,10 +164,17 @@ for file in files:
 print("Optimization Finished!")
 print("Total time elapsed: {:.4f}s".format(time.time() - t_total))
 
+plt.figure()
+for i in range(len(featuresStack)):
+	tsne_plot(featuresStack[i],i+1, args.epochs)
+
+plt.title("best was {}, but this is 750th epoch".format(best_epoch))
+
+plt.show()
+
+
+
+
 # Restore best model
 print('Loading {}th epoch'.format(best_epoch))
 model.load_state_dict(torch.load('{}.pkl'.format(best_epoch)))
-
-# Testing
-compute_test()
-#print(args.cuda)

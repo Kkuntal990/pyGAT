@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 from graphviz import Digraph
 
 import torch
